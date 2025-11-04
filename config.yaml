@@ -1,0 +1,24 @@
+# Ajouter à config.yaml
+paths:
+  models_dir: "models/saved_models/"
+  logs_dir: "logs/"
+  results_dir: "results/"
+
+datasets:
+  nsl_kdd:
+    train_path: "data/raw/NSL-KDD/KDDTrain+.txt"
+    test_path: "data/raw/NSL-KDD/KDDTest+.txt"
+    columns_path: "data/raw/NSL-KDD/columns.txt"
+  
+preprocessing:
+  numerical_scaler: "standard"  # standard, minmax, robust
+  encoding: "label"  # label, onehot
+  handle_imbalance: true
+
+hybrid:
+  fusion_method: "voting"  # voting, stacking, weighted
+  weights:
+    random_forest: 0.3
+    xgboost: 0.3
+    cnn: 0.2
+    lstm: 0.2
