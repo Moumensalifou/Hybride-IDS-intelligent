@@ -1,0 +1,142 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Suricata IDS
+  suricata:
+    build: ./suricata
+    container_name: suricata-ids
+    network_mode: "host"  # Pour capturer tout le trafic
+    privileged: true
+    volumes:
+      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
+      - ./suricata/rules:/var/lib/suricata/rules
+      - ./suricata/logs:/var/log/suricata
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - INTERFACE=${NETWORK_INTERFACE:-eth0}
+    restart: unless-stopped
+    command: >
+      -c /etc/suricata/suricata.yaml
+      -i ${NETWORK_INTERFACE:-eth0}
+
+  # Pipeline ML
+  ml-pipeline:
+    build: ./ml-pipeline
+    container_name: ml-pipeline
+    depends_on:
+      - database
+      - message-broker
+    volumes:
+      - ./ml-pipeline/data:/app/data
+      - ./ml-pipeline/models:/app/models
+      - ./suricata/logs:/app/data/raw/suricata_logs
+    environment:
+      - DATABASE_URL=postgresql://user:pass@database:5432/ids_db
+      - KAFKA_BROKER=message-broker:9092
+    restart: unless-stopped
+    command: python src/main.py --mode realtime
+
+  # Dashboard
+  dashboard:
+    build: ./dashboard
+    container_name: ids-dashboard
+    depends_on:
+      - database
+      - api
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./dashboard/src:/app/src
+      - ./ml-pipeline/data/models:/app/models
+    environment:
+      - API_URL=http://api:8000
+      - DATABASE_URL=postgresql://user:pass@database:5432/ids_db
+    restart: unless-stopped
+
+  # API
+  api:
+    build: ./api
+    container_name: ids-api
+    depends_on:
+      - database
+      - ml-pipeline
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api/app:/app/app
+      - ./ml-pipeline/data/models:/app/models
+    environment:
+      - DATABASE_URL=postgresql://user:pass@database:5432/ids_db
+    restart: unless-stopped
+
+  # Base de données
+  database:
+    image: postgres:15
+    container_name: ids-database
+    environment:
+      - POSTGRES_USER=${DB_USER:-ids_user}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-ids_password}
+      - POSTGRES_DB=${DB_NAME:-ids_db}
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  # Message Broker (Kafka)
+  message-broker:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka-broker
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://message-broker:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  # Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
